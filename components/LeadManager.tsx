@@ -37,7 +37,6 @@ const LeadManager: React.FC<LeadManagerProps> = ({
   onAssignLeads, 
   onBulkUpdateLeads, 
   onDeleteLead,
-  onDeduplicateLeads
 }) => {
   const getBSTDate = () => {
     const d = new Date();
@@ -48,12 +47,14 @@ const LeadManager: React.FC<LeadManagerProps> = ({
   const [selectedModId, setSelectedModId] = useState('');
   const [assignedDate, setAssignedDate] = useState(getBSTDate().toISOString().split('T')[0]);
   
+  // Intelligence Filters
   const [minDaysSinceCall, setMinDaysSinceCall] = useState<string>('');
   const [minDaysSinceOrder, setMinDaysSinceOrder] = useState<string>('');
   const [strategicSelectedPhones, setStrategicSelectedPhones] = useState<string[]>([]);
   
-  const [rangeStart, setRangeStart] = useState<string>('');
-  const [rangeEnd, setRangeEnd] = useState<string>('');
+  // Range Selection
+  const [rangeFrom, setRangeFrom] = useState<string>('1');
+  const [rangeTo, setRangeTo] = useState<string>('100');
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all' | 'unassigned'>('all');
@@ -77,6 +78,85 @@ const LeadManager: React.FC<LeadManagerProps> = ({
   const showToast = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(null), 4000);
+  };
+
+  // Restored Upload Logic
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    const extension = file.name.split('.').pop()?.toLowerCase();
+
+    if (extension === 'csv') {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => processDataArray(results.data)
+      });
+    } else if (extension === 'xlsx' || extension === 'xls') {
+      reader.onload = (evt) => {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+        processDataArray(data);
+      };
+      reader.readAsBinaryString(file);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const processDataArray = (data: any[]) => {
+    setIsProcessing(true);
+    const existingPhones = new Set(leads.map(l => cleanPhoneNumber(l.phoneNumber)));
+    const batchPhones = new Set<string>();
+    const newLeads: Lead[] = [];
+
+    data.forEach((row, idx) => {
+      const findValue = (possibleKeys: string[]) => {
+        const rowKeys = Object.keys(row);
+        const foundKey = rowKeys.find(rk => 
+          possibleKeys.some(pk => {
+            const normalizedRowKey = rk.toLowerCase().replace(/[\s_]/g, '');
+            const normalizedSearchKey = pk.toLowerCase().replace(/[\s_]/g, '');
+            return normalizedRowKey.includes(normalizedSearchKey) || normalizedSearchKey.includes(normalizedRowKey);
+          })
+        );
+        return foundKey ? String(row[foundKey]).trim() : "";
+      };
+
+      const phone = cleanPhoneNumber(findValue(['phone', 'mobile', 'number', 'contact', 'customerphone', 'cell', 'মোবাইল', 'ফোন']));
+      
+      if (phone.length >= 10) {
+        if (existingPhones.has(phone) || batchPhones.has(phone)) return;
+        batchPhones.add(phone);
+        
+        const name = findValue(['name', 'customer', 'recipient', 'client', 'নাম', 'কাস্টমার']);
+        const addr = findValue(['address', 'location', 'area', 'destination', 'ঠিকানা']);
+        
+        newLeads.push({
+          id: `lead-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+          businessId: currentUser.businessId,
+          phoneNumber: phone, 
+          customerName: name || 'Prospect', 
+          address: addr || '',
+          moderatorId: '', 
+          status: 'pending' as LeadStatus, 
+          assignedDate: '', 
+          createdAt: getBSTDate().toISOString()
+        });
+      }
+    });
+
+    if (newLeads.length > 0) {
+      onAssignLeads(newLeads);
+      showToast(`✅ ${newLeads.length} Leads Imported!`);
+    } else {
+      alert("No new unique phone numbers found in the file.");
+    }
+    setIsProcessing(false);
   };
 
   const contacts = useMemo(() => {
@@ -175,95 +255,23 @@ const LeadManager: React.FC<LeadManagerProps> = ({
     });
   }, [contacts, statusFilter, searchPhone, minDaysSinceCall, minDaysSinceOrder]);
 
-  const processDataArray = (data: any[]) => {
-    setIsProcessing(true);
-    const existingPhones = new Set(leads.map(l => cleanPhoneNumber(l.phoneNumber)));
-    const batchPhones = new Set<string>();
-    let duplicateCount = 0;
-    const newLeads: Lead[] = [];
-    data.forEach((row, idx) => {
-      const findValue = (possibleKeys: string[]) => {
-        const rowKeys = Object.keys(row);
-        const foundKey = rowKeys.find(rk => 
-          possibleKeys.some(pk => {
-            const normalizedRowKey = rk.toLowerCase().replace(/[\s_]/g, '');
-            const normalizedSearchKey = pk.toLowerCase().replace(/[\s_]/g, '');
-            return normalizedRowKey.includes(normalizedSearchKey) || normalizedSearchKey.includes(normalizedRowKey);
-          })
-        );
-        return foundKey ? String(row[foundKey]).trim() : "";
-      };
-      const phone = cleanPhoneNumber(findValue(['phone', 'mobile', 'number', 'contact', 'customerphone', 'cell', 'মোবাইল', 'ফোন']));
-      if (phone.length >= 11) {
-        if (existingPhones.has(phone) || batchPhones.has(phone)) {
-          duplicateCount++;
-          return;
-        }
-        batchPhones.add(phone);
-        const name = findValue(['name', 'customer', 'recipient', 'client', 'নাম', 'কাস্টমার']);
-        const addr = findValue(['address', 'location', 'area', 'destination', 'ঠিকানা']);
-        newLeads.push({
-          id: `lead-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
-          businessId: currentUser.businessId,
-          phoneNumber: phone, 
-          customerName: name || 'Prospect', 
-          address: addr || '',
-          moderatorId: selectedModId || '', 
-          status: 'pending' as LeadStatus, 
-          assignedDate: selectedModId ? assignedDate : '', 
-          createdAt: getBSTDate().toISOString()
-        });
-      }
+  const applyRangeSelection = () => {
+    const from = parseInt(rangeFrom) - 1;
+    const to = parseInt(rangeTo);
+    if (isNaN(from) || isNaN(to)) return;
+
+    const slice = filteredContacts.slice(Math.max(0, from), Math.min(filteredContacts.length, to));
+    const newPhones = slice.map(c => c.phone);
+    setStrategicSelectedPhones(prev => {
+      const combined = new Set([...prev, ...newPhones]);
+      return Array.from(combined);
     });
-    if (newLeads.length > 0) {
-      onAssignLeads(newLeads);
-      showToast(`✅ ${newLeads.length} টি লিড যোগ করা হয়েছে!`);
-    } else {
-      alert("❌ কোনো নতুন ভ্যালিড লিড পাওয়া যায়নি।");
-    }
-    setIsProcessing(false);
-  };
-
-  const handleManualSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!phoneNumbers.trim()) return;
-    setIsProcessing(true);
-    const numberList = phoneNumbers.split(/[\n,]/).map(n => n.trim()).filter(n => n.length >= 10);
-    const manualLeads = numberList.map(num => ({ 'Phone': num, 'Name': customerName, 'Address': address }));
-    processDataArray(manualLeads);
-    setPhoneNumbers(''); setCustomerName(''); setAddress('');
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsProcessing(true);
-    const fileName = file.name.toLowerCase();
-    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        try {
-          const data = evt.target?.result;
-          const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
-          processDataArray(jsonData);
-        } catch (err) { alert("❌ Excel পড়তে সমস্যা হয়েছে।"); setIsProcessing(false); }
-      };
-      reader.readAsArrayBuffer(file);
-    } else if (fileName.endsWith('.csv')) {
-      Papa.parse(file, { header: true, complete: (res) => processDataArray(res.data), error: () => setIsProcessing(false) });
-    } else {
-      alert("❌ ভুল ফরম্যাট!");
-      setIsProcessing(false);
-    }
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    showToast(`${newPhones.length} added to list.`);
   };
 
   const handleStrategicDeployment = async () => {
     if (strategicSelectedPhones.length === 0 || !selectedModId) {
-      alert("⚠️ মডারেটর এবং লিড সিলেক্ট করুন!");
+      alert("Please select leads and a moderator.");
       return;
     }
     setIsProcessing(true);
@@ -278,20 +286,9 @@ const LeadManager: React.FC<LeadManagerProps> = ({
     try {
       if (existingLeadIds.length > 0) await onBulkUpdateLeads(existingLeadIds, selectedModId, assignedDate);
       if (newLeadsToCreate.length > 0) await onAssignLeads(newLeadsToCreate);
-      showToast(`🎯 ${strategicSelectedPhones.length} টি লিড মোতায়েন করা হয়েছে!`);
+      showToast(`🎯 Duty Assigned Successfully!`);
       setStrategicSelectedPhones([]);
     } catch (err) { alert("Deployment failed."); } finally { setIsProcessing(false); }
-  };
-
-  const applyPreset = (type: 'dormant' | 'followup' | 'fresh') => {
-    if (type === 'dormant') { setMinDaysSinceOrder('30'); setMinDaysSinceCall(''); }
-    else if (type === 'followup') { setMinDaysSinceOrder(''); setMinDaysSinceCall('7'); }
-    else { setMinDaysSinceOrder(''); setMinDaysSinceCall(''); setStatusFilter('pending'); }
-  };
-
-  const getModName = (id: string | null) => {
-    if (!id || id === '') return <span className="text-rose-400 italic">Unassigned</span>;
-    return moderators.find(m => String(m.id) === String(id))?.name || 'Unassigned';
   };
 
   return (
@@ -304,135 +301,173 @@ const LeadManager: React.FC<LeadManagerProps> = ({
 
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
-          <h2 className="text-4xl font-black text-slate-900 tracking-tighter italic">Intelligence Command</h2>
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] mt-1">Dhaka Standard Time Node</p>
+          <h2 className="text-4xl font-black text-slate-900 tracking-tighter italic uppercase">Intelligence Command</h2>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] mt-1 italic">Tactical Duty Deployment Terminal</p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <div className="flex bg-slate-100 p-1.5 rounded-[2rem] border border-slate-200 overflow-x-auto">
-            <button onClick={() => applyPreset('dormant')} className="px-6 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white transition-all whitespace-nowrap">⏳ Dormant (30d+)</button>
-            <button onClick={() => applyPreset('followup')} className="px-6 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white transition-all whitespace-nowrap">📞 Follow-up (7d+)</button>
-            <button onClick={() => applyPreset('fresh')} className="px-6 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white transition-all whitespace-nowrap">✨ Fresh</button>
-          </div>
-          {onDeduplicateLeads && (
-            <button onClick={() => confirm("Cleanup duplicates?") && onDeduplicateLeads()} className="px-6 py-3 bg-white border border-slate-200 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm">
-              🧹 Clean Duplicates
-            </button>
-          )}
+        
+        {/* Lead Injector Terminal */}
+        <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center gap-6">
+           <div className="flex flex-col">
+              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Inject Leads</span>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="px-6 py-3 bg-slate-950 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-lg active:scale-95"
+              >
+                📁 Upload XLSX/CSV
+              </button>
+              <input type="file" ref={fileInputRef} className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileUpload} />
+           </div>
+           <div className="w-px h-10 bg-slate-100"></div>
+           <div>
+              <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Analysis Filters</p>
+              <div className="flex gap-4">
+                 <div className="flex items-center gap-2">
+                    <span className="text-[8px] font-black text-slate-500 uppercase">Min Call Age:</span>
+                    <input type="number" value={minDaysSinceCall} onChange={(e) => setMinDaysSinceCall(e.target.value)} placeholder="Days" className="w-12 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-black outline-none" />
+                 </div>
+                 <div className="flex items-center gap-2">
+                    <span className="text-[8px] font-black text-slate-500 uppercase">Min Order Age:</span>
+                    <input type="number" value={minDaysSinceOrder} onChange={(e) => setMinDaysSinceOrder(e.target.value)} placeholder="Days" className="w-12 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-black outline-none" />
+                 </div>
+              </div>
+           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-slate-950 p-8 rounded-[3rem] text-white shadow-2xl border border-white/5 relative overflow-hidden">
-            <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 border-b border-white/5 pb-4 italic">Assign Duty</h3>
-            <div className="space-y-5">
-               <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
-                 <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Selected</p>
-                 <div className="flex justify-between items-end">
-                    <p className="text-3xl font-black text-indigo-400">{strategicSelectedPhones.length}</p>
-                    <button onClick={() => setStrategicSelectedPhones([])} className="text-[8px] font-black text-rose-400 uppercase hover:underline mb-1">Clear</button>
+          <div className="bg-slate-950 p-8 rounded-[3.5rem] text-white shadow-2xl border border-white/5 relative overflow-hidden">
+            <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-8 border-b border-white/5 pb-4 italic">Operational Protocol</h3>
+            
+            <div className="space-y-8">
+               <div className="bg-white/5 p-6 rounded-[2rem] border border-white/5">
+                 <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Queued for Duty</p>
+                 <div className="flex justify-between items-baseline">
+                    <p className="text-4xl font-black text-indigo-400 italic">{strategicSelectedPhones.length}</p>
+                    <button onClick={() => setStrategicSelectedPhones([])} className="text-[8px] font-black text-rose-400 uppercase hover:underline">Clear Queue</button>
                  </div>
                </div>
-               <div className="space-y-4 pt-4">
-                 <select value={selectedModId} onChange={(e) => setSelectedModId(e.target.value)} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-xl text-[11px] font-black outline-none appearance-none">
-                   <option value="" className="bg-slate-900">Select Moderator...</option>
-                   {moderators.filter(m => m.is_active).map(m => <option key={m.id} value={m.id} className="bg-slate-900">{m.name}</option>)}
-                 </select>
-                 <input type="date" value={assignedDate} onChange={(e) => setAssignedDate(e.target.value)} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-xl text-[11px] font-black outline-none" />
+
+               {/* Smart Selection Tools */}
+               <div className="space-y-4">
+                  <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">S.N. Deployment Scope</p>
+                  <div className="grid grid-cols-2 gap-3">
+                     <div className="space-y-1">
+                        <label className="text-[7px] font-black text-slate-600 uppercase ml-1">From</label>
+                        <input type="number" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} className="w-full bg-slate-900 border border-white/5 rounded-xl px-4 py-3 text-xs font-black text-white outline-none" />
+                     </div>
+                     <div className="space-y-1">
+                        <label className="text-[7px] font-black text-slate-600 uppercase ml-1">To</label>
+                        <input type="number" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} className="w-full bg-slate-900 border border-white/5 rounded-xl px-4 py-3 text-xs font-black text-white outline-none" />
+                     </div>
+                  </div>
+                  <button onClick={applyRangeSelection} className="w-full bg-white/10 hover:bg-white/20 text-white py-3.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">Capture Range</button>
                </div>
-               <button onClick={handleStrategicDeployment} disabled={isProcessing || strategicSelectedPhones.length === 0} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-800 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl transition-all">
-                 Set Duty List
+
+               <div className="pt-4 space-y-4">
+                 <div className="space-y-2">
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest ml-1">Assign To Unit</label>
+                    <select value={selectedModId} onChange={(e) => setSelectedModId(e.target.value)} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-xl text-[11px] font-black text-white outline-none">
+                      <option value="" className="bg-slate-900">Select Moderator...</option>
+                      {moderators.filter(m => m.is_active).map(m => <option key={m.id} value={m.id} className="bg-slate-900">{m.name}</option>)}
+                    </select>
+                 </div>
+                 <div className="space-y-2">
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest ml-1">Shift Date</label>
+                    <input type="date" value={assignedDate} onChange={(e) => setAssignedDate(e.target.value)} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-xl text-[11px] font-black text-white outline-none" />
+                 </div>
+               </div>
+
+               <button 
+                 onClick={handleStrategicDeployment} 
+                 disabled={isProcessing || strategicSelectedPhones.length === 0 || !selectedModId} 
+                 className="w-full py-5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-20 text-white rounded-[2rem] font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95"
+               >
+                 {isProcessing ? 'Deploying...' : 'Deploy Unit Mission'}
                </button>
-            </div>
-          </div>
-          
-          <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-50 pb-4">Data Ingestion</h3>
-            <div className="space-y-4">
-               <button onClick={() => fileInputRef.current?.click()} disabled={isProcessing} className="w-full py-4 bg-slate-950 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-black flex items-center justify-center gap-2 shadow-lg">
-                 📁 Batch File Upload
-               </button>
-               <input type="file" ref={fileInputRef} className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileUpload}/>
-               <form onSubmit={handleManualSubmit} className="space-y-4 pt-4 border-t border-slate-50">
-                  <p className="text-[8px] font-black text-slate-400 uppercase ml-1">Manual Injection</p>
-                  <textarea rows={3} value={phoneNumbers} onChange={(e) => setPhoneNumbers(e.target.value)} className="w-full px-4 py-4 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold outline-none" placeholder="017... 018..."/>
-                  <button disabled={isProcessing || !phoneNumbers} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-black py-4 rounded-xl uppercase tracking-widest text-[9px]">Inject</button>
-               </form>
             </div>
           </div>
         </div>
 
         <div className="lg:col-span-3 space-y-6">
-           <div className="bg-white p-6 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col md:flex-row gap-4 items-center">
+           <div className="bg-white p-6 rounded-[3.5rem] shadow-sm border border-slate-100 flex flex-col md:flex-row gap-4 items-center">
               <div className="relative flex-1 group">
                 <span className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
-                <input type="text" placeholder="Search Identity..." value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} className="w-full pl-14 pr-8 py-5 bg-slate-50 border border-slate-200 rounded-[2.5rem] text-[11px] font-black outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all"/>
+                <input type="text" placeholder="Search Database (Phone/Name)..." value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} className="w-full pl-14 pr-8 py-5 bg-slate-50 border border-slate-200 rounded-[2.5rem] text-[11px] font-black outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all"/>
               </div>
-              <div className="flex bg-slate-100 p-2 rounded-[2rem] border border-slate-200 overflow-x-auto max-w-full">
+              <div className="flex bg-slate-100 p-2 rounded-full border border-slate-200 overflow-x-auto max-w-full">
                 {['all', 'unassigned', 'pending', 'confirmed', 'no-response'].map(stat => (
-                  <button key={stat} onClick={() => setStatusFilter(stat as any)} className={`px-6 py-3 rounded-2xl text-[9px] font-black uppercase transition-all tracking-widest whitespace-nowrap ${statusFilter === stat ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-400 hover:text-slate-600'}`}>{stat}</button>
+                  <button key={stat} onClick={() => setStatusFilter(stat as any)} className={`px-6 py-3 rounded-full text-[9px] font-black uppercase transition-all tracking-widest whitespace-nowrap ${statusFilter === stat ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-400 hover:text-slate-600'}`}>{stat}</button>
                 ))}
               </div>
            </div>
 
-           <div className="bg-white rounded-[3.5rem] shadow-2xl border border-slate-100 overflow-hidden">
+           <div className="bg-white rounded-[4rem] shadow-2xl border border-slate-100 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead className="bg-slate-950">
                     <tr>
-                      <th className="px-6 py-7 text-[9px] font-black text-slate-500 uppercase">S.N.</th>
-                      <th className="px-6 py-7 text-[9px] font-black text-slate-500 uppercase text-center">Select</th>
-                      <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase">Identity</th>
-                      <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase">Activity Age</th>
-                      <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase text-right">Moderator</th>
+                      <th className="px-8 py-8 text-[9px] font-black text-slate-500 uppercase tracking-widest">S.N.</th>
+                      <th className="px-6 py-8 text-[9px] font-black text-slate-500 uppercase tracking-widest text-center">Duty</th>
+                      <th className="px-10 py-8 text-[9px] font-black text-slate-500 uppercase tracking-widest">Client Identity</th>
+                      <th className="px-10 py-8 text-[9px] font-black text-slate-500 uppercase tracking-widest">Operational Data</th>
+                      <th className="px-10 py-8 text-[9px] font-black text-slate-500 uppercase tracking-widest text-right">Unit Assigned</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {filteredContacts.map((contact, idx) => (
-                      <tr key={contact.phone} className={`group hover:bg-slate-50/50 transition-colors ${strategicSelectedPhones.includes(contact.phone) ? 'bg-indigo-50/30' : ''}`}>
-                        <td className="px-6 py-8">
-                           <span className="text-[10px] font-black text-slate-300 italic">#{idx + 1}</span>
-                        </td>
-                        <td className="px-6 py-8 text-center">
-                           <input type="checkbox" checked={strategicSelectedPhones.includes(contact.phone)} onChange={() => { setStrategicSelectedPhones(prev => prev.includes(contact.phone) ? prev.filter(p => p !== contact.phone) : [...prev, contact.phone]); }} className="w-6 h-6 rounded-xl border-slate-300 text-indigo-600 cursor-pointer" />
-                        </td>
-                        <td className="px-10 py-8">
-                           <div className="flex items-center gap-4">
-                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-sm shadow-sm ${contact.totalOrders > 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                {contact.name.charAt(0)}
-                              </div>
-                              <div>
-                                <p className="font-black text-slate-900 text-sm font-mono tracking-tighter leading-none">{contact.phone}</p>
-                                <p className="text-[10px] font-black text-slate-400 uppercase mt-1">{contact.name}</p>
-                              </div>
-                           </div>
-                        </td>
-                        <td className="px-10 py-8">
-                           <div className="flex gap-8">
-                              <div>
-                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Last Call</p>
-                                <p className={`text-[10px] font-black ${contact.daysSinceCall !== null && contact.daysSinceCall > 7 ? 'text-rose-500' : 'text-slate-800'}`}>
-                                  {contact.daysSinceCall !== null ? `${contact.daysSinceCall}d` : '--'}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Last Order</p>
-                                <p className={`text-[10px] font-black ${contact.daysSinceOrder !== null && contact.daysSinceOrder > 30 ? 'text-orange-600' : 'text-slate-800'}`}>
-                                  {contact.daysSinceOrder !== null ? `${contact.daysSinceOrder}d` : '--'}
-                                </p>
-                              </div>
-                           </div>
-                        </td>
-                        <td className="px-10 py-8 text-right">
-                           <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest border ${
-                             contact.currentStatus === 'unassigned' || !contact.moderatorId ? 'bg-rose-50 text-rose-400 border-rose-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'
-                           }`}>
-                             {contact.currentStatus}
-                           </span>
-                           <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase">Unit: {getModName(contact.moderatorId)}</p>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredContacts.map((contact, idx) => {
+                      const isSelected = strategicSelectedPhones.includes(contact.phone);
+                      return (
+                        <tr key={contact.phone} className={`group hover:bg-slate-50 transition-colors ${isSelected ? 'bg-indigo-50/40' : ''}`}>
+                          <td className="px-8 py-10">
+                             <span className="text-[10px] font-black text-slate-300 italic">#{idx + 1}</span>
+                          </td>
+                          <td className="px-6 py-10 text-center">
+                             <input type="checkbox" checked={isSelected} onChange={() => { setStrategicSelectedPhones(prev => prev.includes(contact.phone) ? prev.filter(p => p !== contact.phone) : [...prev, contact.phone]); }} className="w-6 h-6 rounded-xl border-slate-300 text-indigo-600 cursor-pointer shadow-sm" />
+                          </td>
+                          <td className="px-10 py-10">
+                             <div className="flex items-center gap-5">
+                                <div className={`w-14 h-14 rounded-3xl flex items-center justify-center font-black text-base shadow-sm ${contact.totalOrders > 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'} italic`}>
+                                  {contact.name.charAt(0)}
+                                </div>
+                                <div>
+                                  <p className="font-black text-slate-950 text-base font-mono tracking-tighter leading-none">{contact.phone}</p>
+                                  <p className="text-[10px] font-black text-indigo-500 uppercase mt-2 tracking-widest italic">{contact.name}</p>
+                                  <p className="text-[8px] text-slate-400 font-bold truncate max-w-[150px] mt-1 uppercase italic">{contact.address}</p>
+                                </div>
+                             </div>
+                          </td>
+                          <td className="px-10 py-10">
+                             <div className="flex gap-12">
+                                <div>
+                                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Last Call</p>
+                                  <p className={`text-[14px] font-black ${contact.daysSinceCall !== null && contact.daysSinceCall > 7 ? 'text-rose-500' : 'text-slate-900'}`}>
+                                    {contact.daysSinceCall !== null ? `${contact.daysSinceCall}d ago` : '--'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Last Order</p>
+                                  <p className={`text-[14px] font-black ${contact.daysSinceOrder !== null && contact.daysSinceOrder > 30 ? 'text-orange-600' : 'text-slate-900'}`}>
+                                    {contact.daysSinceOrder !== null ? `${contact.daysSinceOrder}d ago` : '--'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Impact</p>
+                                  <p className="text-[10px] font-black text-emerald-600 uppercase bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-100 italic">{contact.totalOrders} Orders</p>
+                                </div>
+                             </div>
+                          </td>
+                          <td className="px-10 py-10 text-right">
+                             <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest border italic ${
+                               contact.currentStatus === 'unassigned' || !contact.moderatorId ? 'bg-rose-50 text-rose-400 border-rose-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                             }`}>
+                               {contact.currentStatus}
+                             </span>
+                             <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase italic">Unit: <span className="text-slate-600 font-black">{moderators.find(m => String(m.id) === String(contact.moderatorId))?.name || 'Unassigned'}</span></p>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -13,7 +13,7 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ businessData,
   const [txnId, setTxnId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'bkash' | 'nagad' | 'rocket'>('bkash');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [step, setStep] = useState(1);
+  const [showInvoice, setShowInvoice] = useState(false);
   const [adminWallets, setAdminWallets] = useState({ bkash: '01XXXXXXXXX', nagad: '01XXXXXXXXX', rocket: '01XXXXXXXXX' });
 
   useEffect(() => {
@@ -25,8 +25,6 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ businessData,
           .eq('business_id', 'system-platform')
           .maybeSingle();
         
-        if (error) throw error;
-        
         if (data?.courier_config) {
           setAdminWallets({
             bkash: data.courier_config.bkash || '01XXXXXXXXX',
@@ -35,41 +33,16 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ businessData,
           });
         }
       } catch (e) {
-        console.warn("Using default wallets - system config fetch failed", e);
+        console.warn("Using default wallets", e);
       }
     };
     fetchAdminWallets();
   }, []);
 
   const plans = [
-    { 
-      id: 'starter', 
-      name: "Starter", 
-      price: 250, 
-      duration: "প্রতি মাস", 
-      durationDays: 30, 
-      desc: "ছোট পেজের জন্য সেরা", 
-      features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"] 
-    },
-    { 
-      id: 'business', 
-      name: "Business", 
-      price: 999, 
-      duration: "৬ মাস", 
-      durationDays: 180, 
-      desc: "Growing online shops", 
-      features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"], 
-      recommended: true 
-    },
-    { 
-      id: 'enterprise', 
-      name: "Enterprise", 
-      price: 2999, 
-      duration: "১ বছর", 
-      durationDays: 365, 
-      desc: "Custom solution", 
-      features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"] 
-    }
+    { id: 'starter', name: "Starter", price: 250, duration: "প্রতি মাস", durationDays: 30, desc: "ছোট পেজের জন্য সেরা", features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"] },
+    { id: 'business', name: "Business", price: 999, duration: "৬ মাস", durationDays: 180, desc: "Growing online shops", features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"], recommended: true },
+    { id: 'enterprise', name: "Enterprise", price: 2999, duration: "১ বছর", durationDays: 365, desc: "Custom solution", features: ["Lead Tracking", "Order Management", "Staff Audit", "Financial Reports"] }
   ];
 
   const handleSubmitPayment = async () => {
@@ -80,141 +53,272 @@ const SubscriptionManager: React.FC<SubscriptionManagerProps> = ({ businessData,
     
     setIsSubmitting(true);
     try {
-      const updatePayload = {
+      const { error } = await supabase.from('businesses').update({
         transaction_id: txnId.trim().toUpperCase(),
         payment_phone: paymentPhone.trim(),
         selected_plan: String(selectedPlan.id),
         selected_plan_name: String(selectedPlan.name),
         selected_plan_price: Number(selectedPlan.price),
         selected_plan_days: Number(selectedPlan.durationDays)
-      };
-
-      const { error } = await supabase.from('businesses').update(updatePayload).eq('id', businessData.id);
+      }).eq('id', businessData.id);
 
       if (error) throw error;
-      
-      setStep(3);
       onRefresh();
+      alert("পেমেন্ট তথ্য সাবমিট হয়েছে! অ্যাডমিন ভেরিফাই করলে আপনার একাউন্ট আপডেট হবে।");
+      setSelectedPlan(null); // Reset form
     } catch (err: any) {
-      alert("ত্রুটি: পেমেন্ট সাবমিট করা সম্ভব হয়নি। " + (err.message || "Unknown error"));
+      alert("ত্রুটি: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (!businessData) {
-    return <div className="p-20 text-center font-black uppercase text-slate-400">Loading Operational Data...</div>;
-  }
+  const isPending = businessData?.transaction_id && businessData?.plan === 'trial';
+  const isPro = businessData?.plan === 'pro';
+  const isExpired = businessData?.expires_at && new Date(businessData.expires_at) < new Date();
 
-  if (businessData?.transaction_id && step !== 3) {
-    return (
-      <div className="py-20 text-center space-y-8 animate-in fade-in duration-500 bg-white rounded-[3rem] shadow-xl border border-slate-100 mx-auto max-w-2xl">
-        <div className="text-8xl mb-6">📡</div>
-        <h2 className="text-4xl font-black uppercase italic tracking-tighter text-slate-900">ভেরিফিকেশন পেন্ডিং</h2>
-        <p className="text-slate-400 font-bold max-w-md mx-auto italic px-6">
-          আপনার <span className="text-indigo-600 font-black">{businessData.selected_plan_name || 'Business'}</span> প্ল্যানটির রিকোয়েস্ট পেন্ডিং আছে।
-          অ্যাডমিন ভেরিফাই করলে সার্ভিসটি একটিভ হবে।
-        </p>
-        <div className="p-6 bg-slate-50 border border-slate-100 rounded-3xl inline-block">
-           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">TxnID</p>
-           <p className="text-xl font-mono font-black text-slate-900">{businessData.transaction_id}</p>
-        </div>
-        <div className="pt-8">
-           <button onClick={() => onRefresh()} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-indigo-600 shadow-xl transition-all">চেক স্ট্যাটাস</button>
-        </div>
-      </div>
-    );
-  }
+  const handlePlanClick = (plan: any) => {
+    // Prevent selecting the already active plan if it's already pro
+    if (isPro && businessData.selected_plan === plan.id) {
+      alert("This is your current active plan.");
+      return;
+    }
+    setSelectedPlan(plan);
+    // Smooth scroll to form
+    setTimeout(() => {
+      document.getElementById('payment-terminal')?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
 
-  if (step === 3) {
+  if (showInvoice && isPro) {
     return (
-      <div className="py-20 text-center space-y-8 animate-in zoom-in-95 duration-500 bg-white rounded-[3rem] shadow-xl border border-slate-100 mx-auto max-w-2xl">
-        <div className="text-8xl mb-6 animate-bounce">✅</div>
-        <h2 className="text-4xl font-black uppercase italic text-emerald-600 tracking-tighter">সাবমিট সফল হয়েছে!</h2>
-        <p className="text-slate-400 font-bold italic px-6">১-৩ ঘন্টার মধ্যে আপনার সার্ভিসটি একটিভ হয়ে যাবে।</p>
-        <button onClick={() => setStep(1)} className="px-10 py-5 bg-slate-950 text-white rounded-3xl font-black uppercase text-[10px] tracking-widest shadow-2xl">ড্যাশবোর্ডে ফিরে যান</button>
+      <div className="max-w-2xl mx-auto bg-white p-12 rounded-[3.5rem] shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-500 relative">
+        <button onClick={() => setShowInvoice(false)} className="absolute top-10 right-10 text-slate-400 hover:text-slate-900 font-black text-xs uppercase p-2 no-print">Close ✕</button>
+        <div className="text-center border-b border-slate-100 pb-10 mb-10">
+          <div className="w-20 h-20 bg-slate-950 text-white rounded-3xl flex items-center justify-center text-3xl font-black mx-auto mb-6 shadow-xl shadow-slate-900/20">BY</div>
+          <h2 className="text-3xl font-black tracking-tighter uppercase italic text-slate-900 leading-none">Subscription Invoice</h2>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mt-3 italic">Authorized Digital Receipt</p>
+        </div>
+        
+        <div className="space-y-6">
+          <div className="flex justify-between border-b border-slate-50 pb-4">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Merchant Name</span>
+            <span className="text-sm font-black text-slate-950 uppercase italic">{businessData.name}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-50 pb-4">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Plan Node</span>
+            <span className="text-[10px] font-black text-emerald-600 uppercase bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-100">Verified Pro Active</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-50 pb-4">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Audit TnxID</span>
+            <span className="text-sm font-mono font-black text-slate-950">{businessData.transaction_id || 'SYSTEM_AUTH'}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-50 pb-4">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Valid Until</span>
+            <span className="text-sm font-black text-orange-600 bg-orange-50 px-3 py-1 rounded-lg border border-orange-100">
+              {new Date(businessData.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-12 p-8 bg-slate-950 rounded-[2.5rem] text-center text-white relative overflow-hidden">
+           <div className="absolute top-0 right-0 w-32 h-32 bg-orange-600/10 blur-3xl"></div>
+           <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Operational Protocol</p>
+           <p className="text-4xl font-black tracking-tighter italic">Verified Access</p>
+        </div>
+        
+        <p className="text-[8px] font-black text-slate-300 text-center uppercase tracking-[0.4em] mt-10 italic">This is a system-generated secure document.</p>
+        
+        <div className="flex gap-4 mt-10 no-print">
+           <button onClick={() => window.print()} className="flex-1 py-5 bg-slate-950 hover:bg-black text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl shadow-slate-900/20 active:scale-95">Download PDF / Print</button>
+           <button onClick={() => setShowInvoice(false)} className="px-10 py-5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">Back</button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-16 pb-40">
-      <div className="text-center space-y-4">
-        <h2 className="text-6xl font-black uppercase italic tracking-tighter text-slate-900">সাবস্ক্রিপশন <span className="text-indigo-600">প্ল্যান</span></h2>
-        <p className="text-slate-400 font-bold italic text-xl">আপনার ব্যবসার জন্য সঠিক প্ল্যানটি বেছে নিন।</p>
+    <div className="space-y-12 pb-40 animate-in fade-in duration-700">
+      {/* Dynamic Status Header */}
+      <div className="bg-slate-950 p-10 md:p-14 rounded-[4rem] text-white shadow-2xl relative overflow-hidden border border-white/5">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-orange-600/10 blur-[100px] rounded-full translate-x-1/4 -translate-y-1/4"></div>
+        <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-10">
+           <div>
+              <h2 className="text-5xl md:text-6xl font-black italic tracking-tighter uppercase leading-none">Subscription <br/> <span className="text-orange-500">Node</span></h2>
+              <div className="flex flex-wrap items-center gap-4 mt-6">
+                 <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm ${
+                   isExpired ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' : 
+                   isPending ? 'bg-orange-500/10 text-orange-400 border-orange-500/20 animate-pulse' :
+                   isPro ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                   'bg-slate-500/10 text-slate-400 border-slate-500/20'
+                 }`}>
+                   {isExpired ? '⚠️ System Restricted' : isPending ? '⏳ Audit in Progress' : isPro ? '🛡️ Pro Active' : '📋 Trial Access'}
+                 </span>
+                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Business ID: {businessData.id}</p>
+                 {isPro && (
+                   <button 
+                     onClick={() => setShowInvoice(true)}
+                     className="px-5 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-emerald-600 text-white hover:bg-emerald-500 transition-all flex items-center gap-2 shadow-lg shadow-emerald-600/20"
+                   >
+                     📄 Get My Invoice
+                   </button>
+                 )}
+              </div>
+           </div>
+           <div className="text-center md:text-right">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Service Valid Until</p>
+              <p className={`text-4xl font-black tracking-tighter ${isExpired ? 'text-rose-500' : 'text-orange-500'} italic`}>
+                {new Date(businessData.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+              </p>
+              {isPending && <p className="text-[9px] font-black text-orange-500/60 uppercase tracking-widest mt-2 italic animate-pulse">Update pending verification...</p>}
+           </div>
+        </div>
       </div>
 
-      {step === 1 ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
-          {plans.map((plan) => (
+      {isPending && (
+        <div className="bg-white border-2 border-orange-100 p-8 rounded-[3rem] shadow-xl shadow-orange-500/5 animate-in slide-in-from-top-6 duration-700 flex flex-col md:flex-row items-center justify-between gap-8">
+          <div className="flex items-start gap-6">
+            <div className="w-16 h-16 bg-orange-100 rounded-3xl flex items-center justify-center text-4xl shadow-sm italic text-orange-600">⏳</div>
+            <div>
+              <h4 className="text-2xl font-black text-orange-950 tracking-tight italic uppercase">Request Under Audit</h4>
+              <p className="text-sm font-bold text-orange-800/60 leading-relaxed mt-2 max-w-xl">
+                আপনার পেমেন্ট রিকোয়েস্ট (TnxID: <span className="font-mono bg-orange-50 px-2 py-1 rounded border border-orange-200 text-orange-900 font-black">{businessData.transaction_id}</span>) বর্তমানে রিভিউ করা হচ্ছে।
+                অ্যাডমিন ভেরিফাই করার পর আপনার প্রিমিয়াম ফিচারগুলো অটোমেটিক আনলক হয়ে যাবে।
+              </p>
+            </div>
+          </div>
+          <div className="text-[10px] font-black text-orange-600 uppercase tracking-[0.3em] bg-orange-50 px-8 py-4 rounded-2xl border border-orange-100 animate-pulse whitespace-nowrap">Status: Verification Pending</div>
+        </div>
+      )}
+
+      {/* Plan Selection */}
+      <div className={`grid grid-cols-1 lg:grid-cols-3 gap-10 ${isPending ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+        {plans.map((plan) => {
+          const isActivePlan = isPro && businessData.selected_plan === plan.id;
+          const isSelected = selectedPlan?.id === plan.id;
+          
+          return (
             <div 
               key={plan.id} 
-              onClick={() => setSelectedPlan(plan)} 
-              className={`p-12 rounded-[4rem] border-4 transition-all cursor-pointer relative group flex flex-col ${selectedPlan?.id === plan.id ? 'border-indigo-600 bg-white shadow-3xl scale-105' : 'bg-white border-slate-100 hover:border-slate-200'}`}
+              onClick={() => handlePlanClick(plan)} 
+              className={`p-12 rounded-[4.5rem] border-4 transition-all flex flex-col relative group cursor-pointer ${
+                isActivePlan ? 'border-emerald-500 bg-white shadow-lg' :
+                isSelected ? 'border-orange-600 bg-white shadow-3xl scale-105' : 
+                'bg-white border-slate-100 hover:border-slate-200 hover:shadow-xl'
+              }`}
             >
-              {plan.recommended && <span className="absolute -top-5 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-8 py-2 rounded-full text-[10px] font-black uppercase tracking-widest shadow-xl">Best Value</span>}
-              <h3 className="text-2xl font-black uppercase mb-4 italic">{plan.name}</h3>
+              {plan.recommended && <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-950 text-white px-8 py-2.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-2xl">Recommended Node</span>}
+              <h3 className="text-2xl font-black uppercase mb-4 italic tracking-tight">{plan.name}</h3>
               <div className="flex items-baseline gap-2 mb-6">
-                 <span className="text-5xl font-black italic tracking-tighter text-slate-950">৳{plan.price}</span>
-                 <span className="text-slate-400 font-bold text-sm">/ {plan.duration}</span>
+                 <span className="text-6xl font-black italic tracking-tighter text-slate-950">৳{plan.price}</span>
+                 <span className="text-slate-400 font-bold text-xs uppercase">/ {plan.duration}</span>
               </div>
-              <p className="text-slate-400 font-bold italic mb-10 text-sm">{plan.desc}</p>
-              <ul className="space-y-4 mb-12 flex-1">
+              <ul className="space-y-4 mb-12 flex-1 pt-6 border-t border-slate-50">
                 {plan.features.map((f, i) => (
-                  <li key={i} className="text-[11px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-3">
-                    <span className="w-6 h-6 bg-emerald-50 text-emerald-500 rounded-lg flex items-center justify-center text-xs">✓</span> {f}
+                  <li key={i} className="text-[11px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-3 italic">
+                    <span className="w-5 h-5 bg-emerald-50 text-emerald-500 rounded-lg flex items-center justify-center text-[10px]">✓</span> {f}
                   </li>
                 ))}
               </ul>
-              <button onClick={() => setStep(2)} className={`w-full py-5 rounded-[2rem] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all ${selectedPlan?.id === plan.id ? 'bg-indigo-600 text-white' : 'bg-slate-950 text-white'}`}>কিনুন এখনই</button>
+              <button 
+                type="button"
+                className={`w-full py-5 rounded-[2rem] font-black uppercase text-[11px] tracking-widest transition-all ${
+                  isActivePlan ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' :
+                  isSelected ? 'bg-orange-600 text-white shadow-xl shadow-orange-600/20' : 
+                  'bg-slate-100 text-slate-400 group-hover:bg-slate-950 group-hover:text-white'
+                }`}
+              >
+                {isActivePlan ? '✓ Current Plan Active' : isSelected ? 'Confirm Selection' : 'Select Package'}
+              </button>
             </div>
-          ))}
-        </div>
-      ) : (
-        <div className="max-w-xl mx-auto bg-slate-950 p-12 rounded-[4rem] text-white shadow-3xl space-y-10 border border-white/10 relative overflow-hidden">
-           <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600/10 blur-[100px] rounded-full translate-x-1/2 -translate-y-1/2"></div>
-           <div className="relative z-10 flex justify-between items-center border-b border-white/5 pb-8">
-              <h3 className="text-2xl font-black uppercase italic">পেমেন্ট মেথড</h3>
-              <div className="text-right">
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Selected</p>
-                <p className="text-xl font-black text-indigo-400 italic">{selectedPlan.name}</p>
-              </div>
-           </div>
-           
-           <div className="space-y-8 relative z-10">
-              <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">
-                 <button onClick={() => setPaymentMethod('bkash')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${paymentMethod === 'bkash' ? 'bg-pink-600 text-white shadow-lg' : 'text-slate-400'}`}>bKash</button>
-                 <button onClick={() => setPaymentMethod('nagad')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${paymentMethod === 'nagad' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-400'}`}>Nagad</button>
-                 <button onClick={() => setPaymentMethod('rocket')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${paymentMethod === 'rocket' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>Rocket</button>
-              </div>
+          );
+        })}
+      </div>
 
-              <div className="p-8 bg-white/5 rounded-[2.5rem] border border-white/5 space-y-4">
-                <div className="flex justify-between items-center">
-                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{paymentMethod.toUpperCase()} (Personal)</p>
-                   <span className="text-[9px] font-black px-3 py-1 bg-emerald-500/10 text-emerald-500 rounded-full border border-emerald-500/20 uppercase tracking-widest">SEND MONEY</span>
-                </div>
-                <p className="text-4xl font-black font-mono tracking-tighter text-white">{adminWallets[paymentMethod]}</p>
-                <p className="text-[9px] font-bold text-slate-500 italic uppercase">উপরের নম্বরে টাকা পাঠিয়ে নিচের ঘরে তথ্য দিন।</p>
-              </div>
-              
-              <div className="space-y-4">
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-2">আপনার ফোন নম্বর</label>
-                    <input type="text" placeholder="01XXXXXXXXX" value={paymentPhone} onChange={(e) => setPaymentPhone(e.target.value)} className="w-full px-8 py-5 bg-white/5 border border-white/10 rounded-2xl outline-none focus:border-indigo-500 font-black text-xl tracking-widest text-white" />
-                 </div>
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-2">ট্রানজেকশন আইডি (TxnID)</label>
-                    <input type="text" placeholder="8X2K9L..." value={txnId} onChange={(e) => setTxnId(e.target.value)} className="w-full px-8 py-5 bg-white/5 border border-white/10 rounded-2xl outline-none focus:border-indigo-500 font-black text-xl tracking-widest text-white uppercase" />
-                 </div>
-              </div>
+      {/* Audit Submission Form */}
+      {selectedPlan && !isPending && (
+        <div id="payment-terminal" className="bg-white p-12 rounded-[4rem] shadow-2xl border border-slate-100 animate-in slide-in-from-bottom-10 duration-700">
+          <div className="flex flex-col lg:flex-row gap-16">
+            <div className="lg:w-1/2 space-y-10">
+               <div className="pb-6 border-b border-slate-100">
+                  <h3 className="text-3xl font-black italic tracking-tighter text-slate-950 uppercase">Payment Terminal</h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Submit verification proof for <span className="text-orange-600">{selectedPlan.name} Node</span></p>
+               </div>
 
-              <div className="flex flex-col gap-4">
-                <button onClick={handleSubmitPayment} disabled={isSubmitting} className="w-full py-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2rem] font-black uppercase text-[12px] tracking-widest shadow-2xl active:scale-95 transition-all">
-                  {isSubmitting ? 'প্রসেসিং...' : 'সাবমিট করুন 🚀'}
-                </button>
-                <button onClick={() => setStep(1)} className="w-full py-4 text-slate-500 font-black uppercase text-[10px] tracking-widest hover:text-white transition-colors italic text-center">বাতিল করুন</button>
-              </div>
-           </div>
+               <div className="space-y-4">
+                 <div 
+                   onClick={() => setPaymentMethod('bkash')}
+                   className={`flex items-center justify-between p-6 rounded-3xl border transition-all cursor-pointer ${paymentMethod === 'bkash' ? 'bg-pink-50 border-pink-200' : 'bg-slate-50 border-slate-100 hover:border-pink-100'}`}
+                 >
+                    <div className="flex flex-col">
+                       <span className={`text-[9px] font-black uppercase tracking-widest ${paymentMethod === 'bkash' ? 'text-pink-600' : 'text-slate-400'}`}>bKash (Personal)</span>
+                       <span className="text-2xl font-mono font-black text-slate-950 mt-1">{adminWallets.bkash}</span>
+                    </div>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-sm ${paymentMethod === 'bkash' ? 'bg-pink-600 text-white' : 'bg-white text-slate-300 border border-slate-100'}`}>✓</div>
+                 </div>
+                 <div 
+                   onClick={() => setPaymentMethod('nagad')}
+                   className={`flex items-center justify-between p-6 rounded-3xl border transition-all cursor-pointer ${paymentMethod === 'nagad' ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-100 hover:border-orange-100'}`}
+                 >
+                    <div className="flex flex-col">
+                       <span className={`text-[9px] font-black uppercase tracking-widest ${paymentMethod === 'nagad' ? 'text-orange-500' : 'text-slate-400'}`}>Nagad (Personal)</span>
+                       <span className="text-2xl font-mono font-black text-slate-950 mt-1">{adminWallets.nagad}</span>
+                    </div>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-sm ${paymentMethod === 'nagad' ? 'bg-orange-600 text-white' : 'bg-white text-slate-300 border border-slate-100'}`}>✓</div>
+                 </div>
+                 <div 
+                   onClick={() => setPaymentMethod('rocket')}
+                   className={`flex items-center justify-between p-6 rounded-3xl border transition-all cursor-pointer ${paymentMethod === 'rocket' ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-100 hover:border-indigo-100'}`}
+                 >
+                    <div className="flex flex-col">
+                       <span className={`text-[9px] font-black uppercase tracking-widest ${paymentMethod === 'rocket' ? 'text-indigo-600' : 'text-slate-400'}`}>Rocket (Personal)</span>
+                       <span className="text-2xl font-mono font-black text-slate-950 mt-1">{adminWallets.rocket}</span>
+                    </div>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-sm ${paymentMethod === 'rocket' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-300 border border-slate-100'}`}>✓</div>
+                 </div>
+               </div>
+               
+               <p className="text-[10px] font-bold text-slate-400 italic leading-relaxed uppercase bg-slate-50 p-6 rounded-3xl border border-dashed border-slate-200">
+                  ⚠️ Instructions: Send Money (৳{selectedPlan.price}) to the selected number above. Copy the Transaction ID and enter it in the form to the right for audit verification.
+               </p>
+            </div>
+
+            <div className="lg:w-1/2 p-10 bg-slate-50 rounded-[3rem] border border-slate-100 space-y-8">
+               <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-2">Sender Mobile Number</label>
+                  <input 
+                    type="text" 
+                    value={paymentPhone} 
+                    onChange={(e) => setPaymentPhone(e.target.value)} 
+                    placeholder="01XXXXXXXXX" 
+                    className="w-full px-8 py-6 bg-white border border-slate-200 rounded-3xl text-xl font-black font-mono outline-none focus:ring-8 focus:ring-orange-500/5 transition-all" 
+                  />
+               </div>
+               <div className="space-y-2">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-2">Transaction ID (TnxID)</label>
+                  <input 
+                    type="text" 
+                    value={txnId} 
+                    onChange={(e) => setTxnId(e.target.value)} 
+                    placeholder="ABC123XYZ" 
+                    className="w-full px-8 py-6 bg-white border border-slate-200 rounded-3xl text-xl font-black font-mono outline-none focus:ring-8 focus:ring-orange-500/5 transition-all uppercase" 
+                  />
+               </div>
+               <button 
+                 onClick={handleSubmitPayment}
+                 disabled={isSubmitting || !paymentPhone || !txnId}
+                 className="w-full py-6 bg-slate-950 hover:bg-black text-white rounded-[2rem] text-[11px] font-black uppercase tracking-widest shadow-2xl transition-all active:scale-95 disabled:opacity-30 flex items-center justify-center gap-4"
+               >
+                 {isSubmitting ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                 ) : 'Submit Audit Proof 🚀'}
+               </button>
+               <div className="text-center">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Verification processed within 1-3 hours.</p>
+                  <button onClick={() => setSelectedPlan(null)} className="text-[9px] font-black text-rose-500 hover:text-rose-600 uppercase tracking-widest mt-4 underline decoration-2 underline-offset-4">Cancel & Reselect</button>
+               </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
